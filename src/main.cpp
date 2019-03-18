@@ -7,9 +7,13 @@
 #include "Eigen-3.3/Eigen/QR"
 #include "helpers.h"
 #include "json.hpp"
-
+#include "spline.h"
+#include <map>
+#include <tuple>
 // for convenience
 using nlohmann::json;
+using std::map;
+using std::tuple;
 using std::string;
 using std::vector;
 
@@ -49,9 +53,15 @@ int main() {
     map_waypoints_dx.push_back(d_x);
     map_waypoints_dy.push_back(d_y);
   }
-
+  //starting lane 
+  int lane = 1;
+  // finite state
+  string state = "KL";
+  map<string, int> lane_direction = {{"LCL", -1}, {"LCR", 1}, {"KL", 0}};
+  //reference velocity
+  double ref_vel = 0.0; //mph
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
-               &map_waypoints_dx,&map_waypoints_dy]
+               &map_waypoints_dx,&map_waypoints_dy, &lane, &state, &ref_vel, &lane_direction]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -97,8 +107,131 @@ int main() {
            * TODO: define a path made up of (x,y) points that the car will visit
            *   sequentially every .02 seconds
            */
-
-
+          //starting state of each cycle
+          double pos_x;
+          double pos_y;
+          double angle;
+          
+          //define boundaries and interpolate points in between using spine function 
+          vector<double> ptsx;
+          vector<double> ptsy;
+          //passing leftover previous path to next few points to enable smooth path
+          int prev_size = previous_path_x.size();
+          
+          /*
+          avoid collision
+          */
+          if (prev_size > 0){
+            car_s = end_path_s;
+          }
+          bool too_close = false;
+          //loop through detected vehicles
+          for(int i = 0; i < sensor_fusion.size(); i++){
+            // find out if the car is in my lane
+            float d = sensor_fusion[i][6];
+            if(d < 4*lane + 4 && d > 4*lane){
+              double vx = sensor_fusion[i][3];
+              double vy = sensor_fusion[i][4];
+              double check_speed = sqrt(vx*vx + vy*vy);
+              double check_car_s = sensor_fusion[i][5];
+              //adjust for latency 
+              check_car_s += (double)prev_size * .02 * check_speed;
+              // if the car is in front of us under a certain threshold
+              double warning_gap = 30.0;
+              if(check_car_s > car_s && check_car_s - car_s < warning_gap){
+                too_close = true;
+                //switch lane
+                int best_lane;
+                string next_state;
+                tie(best_lane, next_state) =  choose_best_lane(sensor_fusion, state, lane, lane_direction, prev_size, end_path_s);
+                std::cout << "best lane is:" << best_lane << '\n';
+                std::cout << "next state is:" << next_state << '\n';
+                lane = best_lane;
+                state = next_state;
+              }
+            }
+          }
+          if (too_close){
+            //slow down
+            ref_vel -= .224;
+          }else if(ref_vel < 49.5){
+            ref_vel += .224;
+          }
+          //if car has executed every step planned
+          if (prev_size < 2){
+            //current location
+            pos_x = car_x;
+            pos_y = car_y;
+            angle = deg2rad(car_yaw);
+            //previous location
+            double prev_car_x = car_x - cos(car_yaw);
+            double prev_car_y = car_y - cos(car_yaw);
+            ptsx.push_back(prev_car_x);
+            ptsx.push_back(pos_x);
+            ptsy.push_back(pos_y);
+            ptsy.push_back(prev_car_y);
+          }
+          else{ //Previous path's end x and y values 
+            pos_x = previous_path_x[prev_size-1];
+            pos_y = previous_path_y[prev_size-1];
+            double pos_x2 = previous_path_x[prev_size-2];
+            double pos_y2 = previous_path_y[prev_size-2];
+            angle = atan2(pos_y-pos_y2,pos_x-pos_x2);
+            ptsx.push_back(pos_x2);
+            ptsx.push_back(pos_x);
+            ptsy.push_back(pos_y2);
+            ptsy.push_back(pos_y);
+          }
+          //set target point (boundary) at a far distance  (to ensure smooth transition)
+          vector<double> next_wp30 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp60 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp90 = getXY(car_s+90, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          ptsx.push_back(next_wp30[0]);
+          ptsx.push_back(next_wp60[0]);
+          ptsx.push_back(next_wp90[0]);
+          
+          ptsy.push_back(next_wp30[1]);
+          ptsy.push_back(next_wp60[1]);
+          ptsy.push_back(next_wp90[1]);
+          
+          //transformation from global coordinates to current local vehicle coordinates
+          for (int i = 0; i < ptsx.size(); i++)
+          {
+            double shift_x = ptsx[i] - pos_x;
+            double shift_y = ptsy[i] - pos_y;
+            
+            ptsx[i] = (shift_x * cos(0-angle) - shift_y* sin(0-angle));
+            ptsy[i] = (shift_x * sin(0-angle) + shift_y* cos(0-angle));
+          }
+          
+          //create a spline
+          tk::spline s;
+          s.set_points(ptsx, ptsy);
+          //add leftover previous path points 
+          for (int i=0; i<prev_size; i++){
+            next_x_vals.push_back(previous_path_x[i]);
+            next_y_vals.push_back(previous_path_y[i]);
+          } 
+          // interpolate spline points between current position and target_position 
+          double target_x = 30.0;
+          double target_y = s(target_x);
+          double target_dist = sqrt(target_x*target_x + target_y*target_y);
+          //decide how many points to interpolate in order to travel at reference velocity
+          double N = (target_dist/(.02*ref_vel/2.24));
+          double x_add_on = 0.0;
+          for (int i=1; i< 50 - prev_size; i++){
+            double x_point = x_add_on + (target_x)/N;
+            double y_point = s(x_point);
+            x_add_on = x_point;
+            //transform back to global coordinates
+            double x_point_local = (x_point * cos(angle) - y_point * sin(angle));
+            double y_point_local = (x_point * sin(angle) + y_point * cos(angle));
+            x_point = x_point_local + pos_x;
+            y_point = y_point_local + pos_y;
+            next_x_vals.push_back(x_point);
+            next_y_vals.push_back(y_point);
+          }
+          
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
 

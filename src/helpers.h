@@ -2,10 +2,14 @@
 #define HELPERS_H
 
 #include <math.h>
+#include <map>
+#include <tuple>
 #include <string>
 #include <vector>
 
 // for convenience
+using std::map;
+using std::tuple;
 using std::string;
 using std::vector;
 
@@ -152,6 +156,90 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s,
   double y = seg_y + d*sin(perp_heading);
 
   return {x,y};
+}
+
+// available successor states
+vector<string> successor_states(string prev_state, int lane){
+  vector<string> states;
+  states.push_back("KL");
+  if(prev_state.compare("KL") ==0){
+    if(lane != 0){
+      states.push_back("LCL");
+    }
+    if(lane != 2){ 
+      states.push_back("LCR");
+    }
+  }else if (prev_state.compare("LCL") ==0){
+    if(lane != 0){
+      states.push_back("LCL");
+    }
+  }else if (prev_state.compare("LCR") ==0) {
+    if(lane != 2) {
+      states.push_back("LCR");
+    }
+  }
+  // If state is "LCL" or "LCR", then just return "KL"
+  return states;
+}
+
+// float calculate_cost(const Vehicle &vehicle, 
+//                      const map<int, vector<Vehicle>> &predictions, 
+//                      const vector<Vehicle> &trajectory) {
+//   // Sum weighted cost functions to get total cost for trajectory.
+//   map<string, float> trajectory_data = get_helper_data(vehicle, trajectory, 
+//                                                        predictions);
+//   float cost = 0.0;
+
+//   // Add additional cost functions here.
+//   vector<std::function<float(const Vehicle &, const vector<Vehicle> &, 
+//                              const map<int, vector<Vehicle>> &, 
+//                              map<string, float> &)
+//     >> cf_list = {goal_distance_cost, inefficiency_cost};
+//   vector<float> weight_list = {REACH_GOAL, EFFICIENCY};
+    
+//   for (int i = 0; i < cf_list.size(); ++i) {
+//     float new_cost = weight_list[i]*cf_list[i](vehicle, trajectory, predictions, 
+//                                                trajectory_data);
+//     cost += new_cost;
+//   }
+
+//   return cost;
+// }
+
+tuple<int, string>  choose_best_lane(const vector<vector<double>> &sensor_fusion, string prev_state, int lane, map<string, int> lane_direction, int prev_size, double car_s){
+  vector<string> states = successor_states(prev_state, lane);
+  float cost;
+  string next_state;
+  int best_lane;
+  double WEIGHT_CHANGE_LANE = 10;
+  double minimum_cost = 999999999;
+  vector<float> costs;
+  for (vector<string>::iterator it = states.begin(); it != states.end(); ++it) {
+    cost = 0;
+    std::cout << "lane change is:" << lane_direction[*it] << '\n';
+    int new_lane = lane + lane_direction[*it];
+    std::cout << "new lane is:" << lane_direction[*it] << '\n';
+    //calculate cost to move to the new line 
+    cost += abs(lane_direction[*it])*WEIGHT_CHANGE_LANE;
+    for(int i = 0; i < sensor_fusion.size(); i++){
+      float d = sensor_fusion[i][6];
+      if(d < 4*new_lane + 4 && d > 4*new_lane){
+        double vx = sensor_fusion[i][3];
+        double vy = sensor_fusion[i][4];
+        double check_speed = sqrt(vx*vx + vy*vy);
+        double check_car_s = sensor_fusion[i][5];
+        check_car_s += (double)prev_size * .02 * check_speed;
+        cost += (check_car_s - car_s) * (check_car_s - car_s);
+      }
+    }
+    if (cost<minimum_cost){
+      best_lane = new_lane;
+      next_state = *it;
+      minimum_cost = cost;
+    }
+  }
+  //return best_lane;
+  return std::make_tuple(best_lane, next_state);
 }
 
 #endif  // HELPERS_H
