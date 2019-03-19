@@ -205,20 +205,41 @@ vector<string> successor_states(string prev_state, int lane){
 
 //   return cost;
 // }
+double get_lane_speed(const vector<vector<double>> &sensor_fusion, int lane, double car_s){
+  double lane_speed = 0;
+  for(int i = 0; i < sensor_fusion.size(); i++){
+    float d = sensor_fusion[i][6];
+    //if the vehicle on the lane 
+    if(d < 4*lane + 4 && d > 4*lane){
+      double vx = sensor_fusion[i][3];
+      double vy = sensor_fusion[i][4];
+      double check_speed = sqrt(vx*vx + vy*vy);
+      double check_car_s = sensor_fusion[i][5];
+      if(check_car_s-car_s>-30 && check_car_s < car_s) {
+        lane_speed = check_speed;
+      }
+    }
+  }
+  return lane_speed;
+ 
+}
 
+  
 tuple<int, string>  choose_best_lane(const vector<vector<double>> &sensor_fusion, string prev_state, int lane, map<string, int> lane_direction, int prev_size, double car_s){
   vector<string> states = successor_states(prev_state, lane);
   float cost;
   string next_state;
   int best_lane;
-  double WEIGHT_CHANGE_LANE = 10;
+  const double WEIGHT_CHANGE_LANE = 10;
+  const double WEIGHT_LANE_COLLISON = 10000;
+  const double WEIGHT_LANE_SPEED = 1;
   double minimum_cost = 999999999;
   vector<float> costs;
   for (vector<string>::iterator it = states.begin(); it != states.end(); ++it) {
     cost = 0;
-    std::cout << "lane change is:" << lane_direction[*it] << '\n';
+    //std::cout << "lane change is:" << lane_direction[*it] << '\n';
     int new_lane = lane + lane_direction[*it];
-    std::cout << "new lane is:" << lane_direction[*it] << '\n';
+    //std::cout << "new lane is:" << lane_direction[*it] << '\n';
     //calculate cost to move to the new line 
     cost += abs(lane_direction[*it])*WEIGHT_CHANGE_LANE;
     for(int i = 0; i < sensor_fusion.size(); i++){
@@ -229,9 +250,10 @@ tuple<int, string>  choose_best_lane(const vector<vector<double>> &sensor_fusion
         double check_speed = sqrt(vx*vx + vy*vy);
         double check_car_s = sensor_fusion[i][5];
         check_car_s += (double)prev_size * .02 * check_speed;
-        cost += (check_car_s - car_s) * (check_car_s - car_s);
+        cost += 1/((check_car_s - car_s) * (check_car_s - car_s))*WEIGHT_LANE_COLLISON;
       }
     }
+    std::cout << "cost on lane"<< new_lane << "is:" << cost << '\n';
     if (cost<minimum_cost){
       best_lane = new_lane;
       next_state = *it;
