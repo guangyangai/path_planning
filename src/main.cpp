@@ -86,7 +86,8 @@ int main() {
           double car_d = j[1]["d"];
           double car_yaw = j[1]["yaw"];
           double car_speed = j[1]["speed"];
-
+          std::cout << "current car speed is:" << car_speed << '\n';
+          std::cout << "current car yaw is:" << car_yaw << '\n';
           // Previous path data given to the Planner
           auto previous_path_x = j[1]["previous_path_x"];
           auto previous_path_y = j[1]["previous_path_y"];
@@ -117,7 +118,10 @@ int main() {
           vector<double> ptsy;
           //passing leftover previous path to next few points to enable smooth path
           int prev_size = previous_path_x.size();
-          
+          std::cout << "left over path size is:" << prev_size << '\n';
+          double lane_speed;
+          lane_speed = get_lane_speed(sensor_fusion, lane, end_path_s);
+          std::cout << "current lane speed is:" << lane_speed << '\n';
           /*
           avoid collision
           */
@@ -164,8 +168,8 @@ int main() {
             pos_y = car_y;
             angle = deg2rad(car_yaw);
             //previous location
-            double prev_car_x = car_x - cos(car_yaw);
-            double prev_car_y = car_y - cos(car_yaw);
+            double prev_car_x = car_x - cos(angle);
+            double prev_car_y = car_y - sin(angle);
             ptsx.push_back(prev_car_x);
             ptsx.push_back(pos_x);
             ptsy.push_back(pos_y);
